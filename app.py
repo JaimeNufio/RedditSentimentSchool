@@ -1,13 +1,17 @@
+from asyncio.windows_events import NULL
 from http import client
 import json, requests, pprint
+from tabnanny import check
 import praw
 import time
+import os 
+import re
 
 """
 Goals
 
 Basically, we aim to make a spider. 
-We want to be able to target a single subreddit. 
+We want to be able to target a  single subreddit. 
 We want to get top posts.
 We want to get all comments from that page.
 We want to be able to keep track of posts as they are update? ## Is pgsql a good choice?
@@ -21,7 +25,9 @@ We want to be able to keep track.
 keys = open('secret.JSON')
 auth = json.load(keys)
 keys.close()
+
 startTime = time.time()
+bigTotal = time.time()
 
 # print(auth)
 
@@ -38,6 +44,12 @@ def timeCheck(msg):
 
     print("{} : {}".format(msg,time.time()-startTime))
     startTime=time.time() #reset timer
+
+def bigTimeCheck(msg):
+    global bigTotal
+
+    print("{} : {}".format(msg,time.time()-bigTotal))
+    bigTotal=time.time() #reset big timer
 
 def subreddit(sub,posts):
     for submission in reddit.subreddit(sub).hot(limit=posts):
@@ -75,26 +87,62 @@ def CollectSubmission(submission):
     Posts.append(submission)
 
 def CommentsFromSubmission(submission):
-    comments = submission.comments.replace_more(limit=0)
-    comments = submission.comments.list()
+    
+    # skip stickied posts
+    if submission.stickied or submission.author.name == "AutoModerator":
+        return 
+    
+    submission.comments.replace_more(limit=0)
+    comments = submission.comments
     count = 0
+
     print("Found a post with {} comments. Running total: {}.".format(len(comments),len(Posts)))
 
-    # for comment in comments:
-        # count += len(comment)
-        # print(comment.id)
-        # pprint.pprint(vars(comment))
-        # pprint.pprint(comment.depth)
-        # count+=1
-        # exit(0)
-        # pass 
-    # print("Comments found in this subreddit: {}. This sub represents {} of total comments.".format(count, count))
+
+    Deleted = lambda x: x == "[removed]";
+    Null = lambda x:  x == "[deleted]"; 
+    removeNL = lambda x: re.sub('\s{2,}','',x.replace("\n"," "))
+    removePunc = lambda x: re.sub("[\n\!\(\)\-\[\]\{\}\;\:\'\"\,\<\>\.\?\@\#\$\%\^\&\*\_\~\’\“\”]",'',x);
+    clean = lambda x: removeNL(removePunc(x))
+    
+
+    with open("comments.csv","a", encoding="utf-8") as f:
+        if (os.stat("comments.csv").st_size == 0):
+            f.write("NAME,SUBREDDIT,SCORE,BODY,DEPTH,AUTHOR,ORIGINALPOST,PERMALINK,CREATED,COLLECTED,LIFE\n")
+        
+        for comment in comments.list():
+
+            # skip moderators
+            if (comment.distinguished == "Moderator") or (comment.author and comment.author.name == "AutoModerator"):
+                pprint.pprint(vars(comment))
+                continue
+
+            # skip empty comments
+            if Deleted(comment.body) or Null(comment.body):
+                continue
+                
+
+            f.write("{id},{subreddit},{score},{body},{depth},{author},{originalpost},{permalink},{created},{collected},{life}\n".format(
+                id=comment.id,
+                subreddit=comment.subreddit_name_prefixed,
+                score=comment.score,
+                body=clean(comment.body),
+                depth=comment.depth,
+                author=comment.author,
+                originalpost=submission.id,
+                permalink=comment.permalink,
+                created=comment.created,
+                collected=time.time(),
+                life=time.time()-comment.created,
+            ))
+
     pass
 
 Subs = [
-    #"wallstreetbets"
-    #,"superstonk","worldnews",'politics','technology','news'
-    "funny","askreddit","gaming","aww","music","pics","worldnews","movies","science",
+    # "wallstreetbets","superstonk",
+    "worldnews",'politics','technology','news',
+    "funny",
+    "askreddit","gaming","aww","music","pics","worldnews","movies","science",
     "todayilearned","videos","news","showerthoughts","jokes","food","askscience","iama","earthporn","gifs",
     "nottheonion","books","diy","explainlikeimfive","art","lifeprotips","space","sports","mildlyinteresting","documentaries"
     ]
@@ -109,21 +157,21 @@ def stepThruSubs(count):
         subreddit(sub,count)
 
 timeCheck("Init")
-stepThruSubs(50)
-# print(Posts)
+stepThruSubs(40)
+bigTimeCheck("Fetched posts from subreddits.")
 
 
 print(len(Posts))
 
-# for post in Posts:
-#     CommentsFromSubmission(post)
+for post in Posts:
+    CommentsFromSubmission(post)
 
 commentCount = 0
 for post in Posts:
     commentCount+=len(post.comments)
-    print("Found a post with {} comments. Running total: {}.".format(len(post.comments),len(commentCount)))
+    print("Found a post with {} comments. Running total: {}.".format(len(post.comments),commentCount))
 
-
+bigTimeCheck("Fetched comments.")
 
 # def process_comment(comment, depth=0):
 #     """Generate comment bodies and depths."""
